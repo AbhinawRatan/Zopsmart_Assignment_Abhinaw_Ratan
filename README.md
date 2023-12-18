@@ -74,7 +74,7 @@ To get started with this project:
 
 The project includes a set of unit tests to ensure that each API endpoint operates correctly. To run the tests, execute the following command in the terminal:
 
- go run main.go
+ go run main_test.go
 
 The tests cover the following:
 
@@ -91,9 +91,6 @@ These tests mock the data layer and focus on the HTTP layer to validate response
 - **Pagination:** Support for paginating the list of records to manage large collections efficiently.
 - **Record History:** An additional feature to track the history of each record's condition over time.
 
-## Contributing
-
-Feel free to contribute to this project. Fork the repository, make your changes, and submit a pull request for review.
 
 ## License
 
