@@ -1,91 +1,183 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
+	"strconv"
 
-	"gofr.dev/pkg/gofr"
+	_ "github.com/mattn/go-sqlite3"
 )
 
-// Record struct to represent a vinyl record
+var db *sql.DB
+
 type Record struct {
 	ID          int    `json:"id"`
 	AlbumTitle  string `json:"albumTitle"`
 	Artist      string `json:"artist"`
 	ReleaseYear int    `json:"releaseYear"`
 	Genre       string `json:"genre"`
-	Condition   string `json:"condition"` // e.g., "New", "Good", "Worn"
+	Condition   string `json:"condition"`
 	InStock     bool   `json:"inStock"`
 }
 
-// Initialize a slice of records
-var records = []Record{
-	{ID: 1, AlbumTitle: "The Dark Side of the Moon", Artist: "Pink Floyd", ReleaseYear: 1973, Genre: "Progressive Rock", Condition: "New", InStock: true},
-	{ID: 2, AlbumTitle: "Abbey Road", Artist: "The Beatles", ReleaseYear: 1969, Genre: "Rock", Condition: "Good", InStock: true},
-	// ... Add 8 more records
-}
-
 func main() {
-	app := gofr.New()
+	var err error
+	db, err = sql.Open("sqlite3", "vinyl_records.db")
+	if err != nil {
+		log.Fatalf("Error opening database: %v", err)
+	}
+	defer db.Close()
 
-	// Routes for records
-	app.GET("/records", ListRecords)
-	app.POST("/records", AddRecord)
-	app.PUT("/records/:id/update", UpdateRecord)
-	app.DELETE("/records/:id", RemoveRecord)
-
-	// Start the server
-	app.Start()
+	createTable()
+	http.HandleFunc("/", operations)
+	log.Fatal(http.ListenAndServe(":4000", nil))
 }
 
-// ListRecords handler function
-func ListRecords(ctx *gofr.Context) (interface{}, error) {
-	return records, nil
+func createTable() {
+	createSQL := `CREATE TABLE IF NOT EXISTS records (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		albumTitle TEXT,
+		artist TEXT,
+		releaseYear INTEGER,
+		genre TEXT,
+		condition TEXT,
+		inStock BOOLEAN
+	);`
+	if _, err := db.Exec(createSQL); err != nil {
+		log.Fatalf("Error creating table: %v", err)
+	}
 }
 
-// AddRecord handler function
-func AddRecord(ctx *gofr.Context) (interface{}, error) {
-	var newRecord Record
-	if err := ctx.Bind(&newRecord); err != nil {
-		return nil, fmt.Errorf("Invalid JSON format: %v", err)
+func operations(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/":
+		fmt.Fprint(w, "<h1>Hi,The Api is Live </h1>")
+	case "/delete":
+		deleteRecord(w, r)
+	case "/add":
+		addRecord(w, r)
+	case "/update":
+		updateRecord(w, r)
+	case "/view":
+		viewRecords(w, r)
+	default:
+		http.Error(w, "404 not found.", http.StatusNotFound)
+	}
+}
+
+func addRecord(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method is not supported.", http.StatusNotFound)
+		return
 	}
 
-	// Assign a unique ID to the new record
-	newRecord.ID = len(records) + 1
+	albumTitle := r.FormValue("albumTitle")
+	artist := r.FormValue("artist")
+	releaseYear, err := strconv.Atoi(r.FormValue("releaseYear"))
+	if err != nil {
+		http.Error(w, "Invalid release year.", http.StatusBadRequest)
+		return
+	}
+	genre := r.FormValue("genre")
+	condition := r.FormValue("condition")
+	inStock, err := strconv.ParseBool(r.FormValue("inStock"))
+	if err != nil {
+		http.Error(w, "Invalid in stock value.", http.StatusBadRequest)
+		return
+	}
 
-	// Add the new record to the slice
-	records = append(records, newRecord)
-	return newRecord, nil
+	_, err = db.Exec("INSERT INTO records (albumTitle, artist, releaseYear, genre, condition, inStock) VALUES (?, ?, ?, ?, ?, ?)", albumTitle, artist, releaseYear, genre, condition, inStock)
+	if err != nil {
+		http.Error(w, "Error adding record.", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprintf(w, "Record added successfully")
 }
 
-// UpdateRecord handler function
-func UpdateRecord(ctx *gofr.Context) (interface{}, error) {
-	id := ctx.ParamAsInt("id")
-	for i, record := range records {
-		if record.ID == id {
-			var updatedRecord Record
-			if err := ctx.Bind(&updatedRecord); err != nil {
-				return nil, fmt.Errorf("Invalid JSON format: %v", err)
-			}
-			records[i] = updatedRecord
-			return updatedRecord, nil
+func viewRecords(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method is not supported.", http.StatusNotFound)
+		return
+	}
+
+	rows, err := db.Query("SELECT * FROM records")
+	if err != nil {
+		http.Error(w, "Error reading records.", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var records []Record
+	for rows.Next() {
+		var rec Record
+		if err := rows.Scan(&rec.ID, &rec.AlbumTitle, &rec.Artist, &rec.ReleaseYear, &rec.Genre, &rec.Condition, &rec.InStock); err != nil {
+			http.Error(w, "Error scanning records.", http.StatusInternalServerError)
+			return
 		}
+		records = append(records, rec)
 	}
 
-	// If no record is found with the given ID
-	return nil, gofr.NewHTTPError(http.StatusNotFound, "Record not found")
+	for _, rec := range records {
+		fmt.Fprintf(w, "ID: %d, AlbumTitle: %s, Artist: %s, ReleaseYear: %d, Genre: %s, Condition: %s, InStock: %t\n", rec.ID, rec.AlbumTitle, rec.Artist, rec.ReleaseYear, rec.Genre, rec.Condition, rec.InStock)
+	}
 }
 
-// RemoveRecord handler function
-func RemoveRecord(ctx *gofr.Context) (interface{}, error) {
-	id := ctx.ParamAsInt("id")
-	for i, record := range records {
-		if record.ID == id {
-			records = append(records[:i], records[i+1:]...)
-			return record, nil
-		}
+func updateRecord(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "PUT" {
+		http.Error(w, "Method is not supported.", http.StatusNotFound)
+		return
 	}
 
-	// If no record is found with the given ID
-	return nil, gofr.NewHTTPError(http.StatusNotFound, "Record not found")
+	id, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil {
+		http.Error(w, "Invalid ID.", http.StatusBadRequest)
+		return
+	}
+
+	albumTitle := r.FormValue("albumTitle")
+	artist := r.FormValue("artist")
+	releaseYear, err := strconv.Atoi(r.FormValue("releaseYear"))
+	if err != nil {
+		http.Error(w, "Invalid release year.", http.StatusBadRequest)
+		return
+	}
+	genre := r.FormValue("genre")
+	condition := r.FormValue("condition")
+	inStock, err := strconv.ParseBool(r.FormValue("inStock"))
+	if err != nil {
+		http.Error(w, "Invalid in stock value.", http.StatusBadRequest)
+		return
+	}
+
+	_, err = db.Exec("UPDATE records SET albumTitle=?, artist=?, releaseYear=?, genre=?, condition=?, inStock=? WHERE id=?", albumTitle, artist, releaseYear, genre, condition, inStock, id)
+	if err != nil {
+		http.Error(w, "Error updating record.", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprintf(w, "Record updated successfully")
+}
+
+func deleteRecord(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		http.Error(w, "Method is not supported.", http.StatusNotFound)
+		return
+	}
+
+	id, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil {
+		http.Error(w, "Invalid ID.", http.StatusBadRequest)
+		return
+	}
+
+	_, err = db.Exec("DELETE FROM records WHERE id=?", id)
+	if err != nil {
+		http.Error(w, "Error deleting record.", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprintf(w, "Record deleted successfully")
 }
